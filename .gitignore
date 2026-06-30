@@ -8,3 +8,15 @@ __pycache__/
 *.pyc
 .env
 .venv/
+
+# reproduction harness (additive)
+.venv-serve/
+*.log
+.pytest_cache/
+predictions/
+normalized/
+# internal design notes — not part of the shareable delta
+CONTEXT.md
+# local-only test scaffolding (kept on disk, not part of the shareable delta)
+tests/
+conftest.py
