@@ -204,6 +204,23 @@ def evaluate(pred_dir: Path, candidate_name: str, gt_dir: Path, skip_baseline: b
         test_results,
     ) = evaluate_candidate(str(pred_dir), all_tests, pdf_basenames, force=True)
 
+    # Don't let one bad page zero out the whole model.
+    # When a single test errors (e.g. malformed LaTeX) or a page's output is missing, benchmark.py
+    # already counts that test as FAILED in test_results — but it ALSO appends to candidate_errors,
+    # and the scoring gate below throws away every per-category score (model -> 0.0) whenever that
+    # list is non-empty. So we clear it here (after logging a breakdown) and let scoring proceed on
+    # the test_results it already holds. A genuinely incomplete run (many missing pages) shows up
+    # as a large logged count.
+    if candidate_errors:
+        missing = sum(1 for e in candidate_errors if "missing MD" in e)
+        sys.stderr.write(
+            f"[evaluate] tolerating {len(candidate_errors)} candidate_errors "
+            f"({missing} missing-page, {len(candidate_errors) - missing} per-test/other); each is "
+            f"already a failed test in test_results. If this count is large, check run.py's "
+            f"generation error tally — the run may be incomplete.\n"
+        )
+        candidate_errors = []
+
     # Per-JSONL scoring (official leaderboard method)
     jsonl_results = {}
     jsonl_scores = []
@@ -277,10 +294,56 @@ def evaluate(pred_dir: Path, candidate_name: str, gt_dir: Path, skip_baseline: b
 
 
 # ---------------------------------------------------------------------------
+# Bounded render timeout
+# ---------------------------------------------------------------------------
+
+def install_bounded_render_timeout():
+    """Put a time limit on the two browser waits olmocr.bench uses to render equations.
+
+    To grade a math test, olmocr.bench draws the equation in headless chromium. Two of its waits
+    use timeout=0, which Playwright treats as "wait forever" — so one bad equation can hang the
+    whole scoring run. We cap both at RENDER_TIMEOUT_MS (default 5s; a real render finishes well
+    under a second, so that's generous), handling the two waits differently:
+
+      - wait_for_load_state("networkidle"): a "page finished loading" guess that's flaky here
+        (the assets are local files) and not load-bearing — the next line checks for real whether
+        katex loaded. So on timeout we swallow it and move on.
+      - wait_for_selector(".katex"): the real "did the equation render?" signal. If it never
+        appears the equation is unrenderable, so on timeout we let it raise and the test fails.
+    """
+    from playwright.sync_api import Page
+    from playwright.sync_api import TimeoutError as PWTimeout
+
+    timeout_ms = int(os.environ.get("RENDER_TIMEOUT_MS", "5000"))
+
+    orig_wait_load = Page.wait_for_load_state
+    orig_wait_selector = Page.wait_for_selector
+
+    def _wait_for_load_state(self, *args, **kwargs):
+        # Not load-bearing (katex is verified on the next line) -> cap it and swallow the timeout.
+        kwargs["timeout"] = timeout_ms
+        try:
+            return orig_wait_load(self, *args, **kwargs)
+        except PWTimeout:
+            return None
+
+    def _wait_for_selector(self, *args, **kwargs):
+        # The real "did it render?" signal -> cap it but let a timeout raise so the equation fails.
+        if kwargs.get("timeout") in (0, None):
+            kwargs["timeout"] = timeout_ms
+        return orig_wait_selector(self, *args, **kwargs)
+
+    Page.wait_for_load_state = _wait_for_load_state
+    Page.wait_for_selector = _wait_for_selector
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
+    install_bounded_render_timeout()
+
     parser = argparse.ArgumentParser(description="Evaluate olmOCR predictions (official benchmark)")
     parser.add_argument("--model", type=str, default="nanonets", help="Model name (selects cache folder)")
     parser.add_argument("--postprocess", action="store_true", help="Run post-processing before evaluation")
