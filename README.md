@@ -1,5 +1,9 @@
 # idp-leaderboard-benchmarks
 
+> **This is a reproduction fork.** It reruns the olmOCR-bench harness over 11 open vision LLMs and
+> reports the per-category numbers. Start with **[REPRODUCE.md](REPRODUCE.md)** — it has the writeup,
+> the exact delta vs upstream (`af8c743`), and the results table. The rest of this README is upstream.
+
 Prediction cache generation and evaluation pipeline for [idp-leaderboard.org](https://idp-leaderboard.org).
 
 Three benchmarks, each testing a different axis of document understanding:
